@@ -1,94 +1,70 @@
 #include "pico.h"
 
-#include <algorithm>
-
-
-Pico::Pico(QObject *parent)
-    : Device(parent)
-#ifndef Q_OS_WASM
-    , handle(0)
-#endif
-{}
+Pico::Pico(QObject *parent) : Device(parent) {}
 
 DeviceState Pico::connect(bool connection){
-#ifdef Q_OS_WASM
-    deviceState = connection ? online : offline;
-    if (connection) {
-        config();
-    }
-    qDebug() << "pico.simulation.connect:" << deviceState;
-    return deviceState;
-#else
-    qDebug() << "pico.connect";
+#ifndef Q_OS_WASM
     PICO_STATUS status;
     if (connection){
         status = ps5000aOpenUnit(&handle, nullptr, PS5000A_DR_16BIT);
         if (status != PICO_OK) {
             qWarning() << "Restart picoscope \n Picoscope failed to OpenUnit \n" << picoStatusToString(status);
-            deviceState = offline;
-        }else{
-            deviceState = online;
-            config();
+            connection = false;
         }
     }else{
         status = ps5000aCloseUnit(handle);
         if (status != PICO_OK) {
             qWarning() << "Improper picoscope connection \n" << picoStatusToString(status);
         }
-        deviceState = offline;
     }
-
-    qDebug() << "pico.online: " << deviceState;
-    return deviceState;
 #endif
+    deviceState = connection ? online : offline;
+    if (connection) {
+        config();
+    }
+    qDebug() << "pico.connect:" << deviceState;
+    return deviceState;
 }
 
 
 DeviceState Pico::config(){
-#ifdef Q_OS_WASM
-    if (deviceState == offline) {
-        qWarning() << "Attempt to configure simulated picoscope while offline";
-        return deviceState;
-    }
-    deviceState = ready;
-    qDebug() << "pico.simulation.config:" << deviceState;
-    return deviceState;
-#else
     if(deviceState == offline){
         qWarning() << "Attempt to configure picoscope while offline";
         return deviceState;
-    }else{
-        range = static_cast<PS5000A_RANGE>(range);
-        PICO_STATUS status = ps5000aSetChannel(handle,PS5000A_CHANNEL_A,1,PS5000A_AC, static_cast<PS5000A_RANGE>(range), 0);
-        if (status != PICO_OK) {
-            qWarning() << "Restart picoscope \n Picoscope failed to SetChannel \n" << picoStatusToString(status);
-            deviceState = error;
-        }
-        buffer.resize(samp);
-        status = ps5000aSetDataBuffers(handle, PS5000A_CHANNEL_A, buffer.data(), nullptr, samp, 0, PS5000A_RATIO_MODE_NONE);
-        if (status != PICO_OK) {
-            qWarning() << "Restart picoscope \n Picoscope failed to SetDataBuffers \n" << picoStatusToString(status);
-            deviceState = error;
-        }
-        status = ps5000aSetSimpleTrigger(handle, 1, PS5000A_EXTERNAL, 1000, PS5000A_RISING, 0, 0);
-        if (status != PICO_OK) {
-            qWarning() << "Restart picoscope \n Picoscope failed to SetSimpleTrigger \n" << picoStatusToString(status);
-            deviceState = error;
-        }
-        float timeIntervalNs;
-        int32_t maxSamples;
-        status = ps5000aGetTimebase2(handle, timebase, samp, &timeIntervalNs, &maxSamples, 0);
-        if (status != PICO_OK) {
-            qWarning() << "Invalid timebase and sample frequency \n" << picoStatusToString(status);
-            deviceState = error;
-        }
+    }
+#ifndef Q_OS_WASM
+    range = static_cast<PS5000A_RANGE>(range);
+    PICO_STATUS status = ps5000aSetChannel(handle,PS5000A_CHANNEL_A,1,PS5000A_AC, static_cast<PS5000A_RANGE>(range), 0);
+    if (status != PICO_OK) {
+        qWarning() << "Restart picoscope \n Picoscope failed to SetChannel \n" << picoStatusToString(status);
+        return error;
+    }
+    buffer.resize(samp);
+    status = ps5000aSetDataBuffers(handle, PS5000A_CHANNEL_A, buffer.data(), nullptr, samp, 0, PS5000A_RATIO_MODE_NONE);
+    if (status != PICO_OK) {
+        qWarning() << "Restart picoscope \n Picoscope failed to SetDataBuffers \n" << picoStatusToString(status);
+        return error;
+    }
+    status = ps5000aSetSimpleTrigger(handle, 1, PS5000A_EXTERNAL, 1000, PS5000A_RISING, 0, 0);
+    if (status != PICO_OK) {
+        qWarning() << "Restart picoscope \n Picoscope failed to SetSimpleTrigger \n" << picoStatusToString(status);
+        return error;
+    }
+    float timeIntervalNs;
+    int32_t maxSamples;
+    status = ps5000aGetTimebase2(handle, timebase, samp, &timeIntervalNs, &maxSamples, 0);
+    if (status != PICO_OK) {
+        qWarning() << "Invalid timebase and sample frequency \n" << picoStatusToString(status);
+        return error;
     }
     if (deviceState == online){
         deviceState = ready;
     }
+#else
+    deviceState = ready;
+#endif
     qDebug() << "pico.config: " << deviceState;
     return deviceState;
-#endif
 }
 
 DeviceState Pico::runBlock(){
@@ -96,30 +72,29 @@ DeviceState Pico::runBlock(){
     if (deviceState != ready) {
         qWarning() << "Attempt to run simulated picoscope while not configured";
     }
-    return deviceState;
 #else
     PICO_STATUS status = ps5000aRunBlock(handle, 0, samp, timebase, nullptr, 0, nullptr, nullptr);
     if (status != PICO_OK) {
         qWarning() << "Restart picoscope \n Picoscope failed to RunBlock \n" << picoStatusToString(status);
         deviceState = error;
     }
-    return deviceState;
 #endif
+    return deviceState;
 }
 
 Data Pico::read(){
-#ifdef Q_OS_WASM
     Data data;
     if (deviceState != ready) {
-        qWarning() << "Attempt to read simulated picoscope while not configured";
+        qWarning() << "Attempt to read picoscope while not configured";
         return data;
     }
-
+#ifdef Q_OS_WASM
     const int sampleCount = std::max(samp, 1);
+    if (simulationData.points.size() == sampleCount && simulationData.points.at(0).x() == offset) {
+        return simulationData;
+    }
     constexpr double referenceSamples = 1000.0;
     constexpr double pi = 3.14159265358979323846;
-    const double standardDeviation = 0.5;
-    std::normal_distribution<double> noise(0.0, standardDeviation);
     const auto dampedPulse = [pi](double sample, double centre, double amplitude, double width) {
         const double delta = sample - centre;
         const double envelope = std::exp(-0.5 * (delta / width) * (delta / width));
@@ -129,82 +104,41 @@ Data Pico::read(){
     data.points.reserve(sampleCount);
     for (int sample = 0; sample < sampleCount; ++sample) {
         const double referenceSample = static_cast<double>(sample) * referenceSamples / sampleCount;
-        const double primaryBurst = dampedPulse(referenceSample, 235.0 + simulationTimeShift, 84.0, 25.0);
-        const double delayedEcho = dampedPulse(referenceSample, 620.0 + simulationTimeShift, 10.0, 22.0);
-        const double value = noise(simulationGenerator) + simulationGain * (primaryBurst + delayedEcho);
+        const double primaryBurst = dampedPulse(referenceSample, 235.0, 84.0, 25.0);
+        const double delayedEcho = dampedPulse(referenceSample, 620.0, 10.0, 22.0);
+        const double value = primaryBurst + delayedEcho;
         data.peak = std::max(data.peak, std::abs(value));
         data.points.append(QPointF(sample + offset, value));
     }
-    return data;
+    simulationData = data;
 #else
-    Data data;
-    if (deviceState != ready){
-        //Generate fakedata
-        // static std::random_device rd;
-        // static std::mt19937 gen(rd());
-        // double limit = volt[range] / 2.0 * 1000.0;
-        // std::uniform_real_distribution<double> dist(-limit, limit);
-
-        // for (uint32_t i = 0; i < samp; ++i) {
-        //     double value = dist(gen);
-        //     if (value > peak){
-        //         peak = value;
-        //         data.tof = i;
-        //     }
-        //     if(value < valley){
-        //         valley = value;
-        //         data.tof = i;
-        //     }
-        //     data.points.append(QPointF(i, value));
-        // }
-        qWarning() << "Attempt to read picoscope while not configured";
-        return data;
-    }else{
-        int16_t ready = 0;
-        QElapsedTimer timer;
-        timer.start();
-        while (!ready) {
-            ps5000aIsReady(handle, &ready);
-            if (timer.elapsed() > 1000) {
-                qWarning() << "Picoscope not receiving trigger";
-                return {0};
-            }
-            QThread::msleep(10);
-        }
-
-        uint32_t samplesReturned = samp;
-        PICO_STATUS status = ps5000aGetValues(handle, 0, &samplesReturned, 1, PS5000A_RATIO_MODE_NONE, 0, nullptr);
-        if (status != PICO_OK) {
+    int16_t ready = 0;
+    QElapsedTimer timer;
+    timer.start();
+    while (!ready) {
+        ps5000aIsReady(handle, &ready);
+        if (timer.elapsed() > 1000) {
+            qWarning() << "Picoscope not receiving trigger";
             return {0};
         }
-        const double maxADC = 32767.0;
-        for (uint32_t i = 0; i < samplesReturned; ++i){
-            double voltage = (static_cast<double>(buffer[i]) / maxADC) * volt[range];
-            if (abs(voltage) > abs(data.peak)){
-                data.peak = voltage;
-            }
-            data.points.append(QPointF(i, voltage));
-        }
+        QThread::msleep(10);
     }
+
+    uint32_t samplesReturned = samp;
+    PICO_STATUS status = ps5000aGetValues(handle, 0, &samplesReturned, 1, PS5000A_RATIO_MODE_NONE, 0, nullptr);
+    if (status != PICO_OK) {
+        return {0};
+    }
+    const double maxADC = 32767.0;
+    for (uint32_t i = 0; i < samplesReturned; ++i){
+        double voltage = (static_cast<double>(buffer[i]) / maxADC) * volt[range];
+        if (abs(voltage) > abs(data.peak)){
+            data.peak = voltage;
+        }
+        data.points.append(QPointF(i, voltage));
+    }
+#endif
     return data;
-#endif
-}
-
-void Pico::setSimulationGain(double gain){
-#ifdef Q_OS_WASM
-    simulationGain = std::clamp(gain, 0.0, 1.0);
-#else
-    Q_UNUSED(gain)
-#endif
-}
-
-void Pico::setSimulationTimeShift(double timeShift)
-{
-#ifdef Q_OS_WASM
-    simulationTimeShift = std::clamp(timeShift, 0.0, 160.0);
-#else
-    Q_UNUSED(timeShift)
-#endif
 }
 
 Pico::~Pico(){

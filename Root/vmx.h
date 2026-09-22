@@ -1,24 +1,24 @@
 #ifndef VMX_H
 #define VMX_H
 
-#include <QSettings>
-#include <QObject>
+#include <QDebug>
 #include <QString>
-#ifndef Q_OS_WASM
-#include <QSerialPort>
-#include <QSerialPortInfo>
-#endif
-#include <QElapsedTimer>
-#include <QApplication>
 #include <QThread>
 #include <cmath>
+
+#ifndef Q_OS_WASM
+#include <QByteArray>
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QSerialPort>
+#endif
+
 #include "device.h"
 
 #define STEP_SIZE 0.00025
-#define SENS 2.149e-001 //(mV/kPa)
-inline int coordinateToSteps(double coordinate)
+inline int inchToSteps(double inch)
 {
-    return static_cast<int>(std::lround(coordinate / STEP_SIZE));
+    return static_cast<int>(std::lround(inch / STEP_SIZE));
 }
 
 struct Coord{
@@ -45,15 +45,16 @@ public:
 
     DeviceState zero();
     DeviceState kill();
-    bool killFlag;
+    std::atomic_bool killflag{false};
 
 
 signals:
-    void updateCoord();
+    void killed();
+    void updateCoord(Coord position);
 
 private:
 #ifndef Q_OS_WASM
-    QSerialPort port;
+    QSerialPort port{this};
     QByteArray read(const QByteArray &term);
     DeviceState write(const QByteArray &cmd);
 #endif

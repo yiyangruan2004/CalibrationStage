@@ -1,11 +1,8 @@
-#include <QApplication>
-
-#include "mainwindow.h"
-#include "filer.h"
+#include "main.h"
 
 int main(int argc, char *argv[])
 {
-    Filer::installLogger();
+    Filer::init();
     QApplication a(argc, argv);
     MainWindow w;
     w.show();

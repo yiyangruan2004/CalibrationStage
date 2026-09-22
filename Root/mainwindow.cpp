@@ -1,22 +1,11 @@
 #include "mainwindow.h"
-#include "filer.h"
-#include "scan.h"
-
-#include <QBrush>
-#include <QColor>
-#include <QFont>
-#include <QMargins>
-#include <QPen>
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow),
     settings("MyCompany", "MyApp")
-    , scan(std::make_unique<Scan>(pico, fg, vmx, folderPath))
 {
     ui->setupUi(this);
     applyDashboardTheme();
-    scanTimer.setInterval(10);
-    connect(&scanTimer, &QTimer::timeout, this, &MainWindow::advanceScan);
 
     // Connection ----------------------------------------------------------------------------------------------------------
     bindConnection(ui->picoConnect, ui->picoStat, &pico);
@@ -43,31 +32,29 @@ MainWindow::MainWindow(QWidget *parent)
     bindCoordBox(ui->posY, "posY", nullptr, vmx.pos.Y);
     bindCoordBox(ui->posZ, "posZ", nullptr, vmx.pos.Z);
 
-    connect(&vmx, &Vmx::updateCoord, this, [this]() {
-        ui->posX->setValue(vmx.pos.X*STEP_SIZE);
-        ui->posY->setValue(vmx.pos.Y*STEP_SIZE);
-        ui->posZ->setValue(vmx.pos.Z*STEP_SIZE);
+    connect(&vmx, &Vmx::updateCoord, this, [this](Coord position) {
+        const QSignalBlocker x(ui->posX), y(ui->posY), z(ui->posZ);
+        ui->posX->setValue(position.X*STEP_SIZE);
+        ui->posY->setValue(position.Y*STEP_SIZE);
+        ui->posZ->setValue(position.Z*STEP_SIZE);
     });
     connect(ui->vmxMove, &QPushButton::clicked, this, [this]() {
+        ui->scan->setEnabled(false);
         Coord goal;
         goal.X = ui->posX->value()/STEP_SIZE;
         goal.Y = ui->posY->value()/STEP_SIZE;
         goal.Z = ui->posZ->value()/STEP_SIZE;
         vmx.coord();
+        vmx.killflag = false;
         vmx.move(goal);
         vmx.coord();
+        ui->scan->setEnabled(true);
     });
     connect(ui->vmxZero, &QPushButton::clicked, this, [this]() {
+        ui->scan->setEnabled(false);
         vmx.zero();
         vmx.coord();
-    });
-    connect(ui->vmxKill, &QPushButton::clicked, this, [this]() {
-        vmx.killFlag = true;
-        vmx.kill();
-        vmx.coord();
-        if (scanState != ScanControlState::Idle) {
-            finishScan(Scan::Outcome::Cancelled);
-        }
+        ui->scan->setEnabled(true);
     });
 
     //Pico config
@@ -86,6 +73,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     bindSpinBox(ui->picoSamp, "picoSamp", &pico, pico.samp);
     bindSpinBox(ui->picoOffset, "picoOffset", &pico, pico.offset);
+    bindDoubleBox(ui->picoSens, "picoSens", &pico, pico.sens);
     bindComboBox(ui->picoRange, "picoRange", &pico, pico.range);
 
     bindSpinBox(ui->picoTimebase, "picoTimebase", &pico, pico.timebase);
@@ -113,17 +101,20 @@ MainWindow::MainWindow(QWidget *parent)
             return;
         }
         ui->fgTrig->setEnabled(false);
+        ui->scan->setEnabled(false);
         QApplication::processEvents();
         pico.runBlock();
         fg.trig();
         const Data data = pico.read();
 
         series->clear();
-        ui->pressure->setText(QString::number(data.peak*SENS));
+        ui->pressure->setText(QString::number(data.peak / pico.sens));
         series->replace(data.points);
-        Filer::saveTrigger(folderPath, {fg.freq, fg.amp, volt[pico.range], pico.samp, vmx.pos},
-                           data.peak, data.points);
+#ifndef Q_OS_WASM
+        Filer::saveTrigger({fg.freq, fg.amp, volt[pico.range], pico.samp, vmx.pos, pico.sens}, data);
+#endif
         ui->fgTrig->setEnabled(true);
+        ui->scan->setEnabled(true);
     });
 
     //Scan
@@ -133,177 +124,108 @@ MainWindow::MainWindow(QWidget *parent)
     bindCoordBox(ui->maxX, "maxX", nullptr, maxCorner.X);
     bindCoordBox(ui->maxY, "maxY", nullptr, maxCorner.Y);
     bindCoordBox(ui->maxZ, "maxZ", nullptr, maxCorner.Z);
-    connect(ui->scan, &QPushButton::clicked, this, &MainWindow::handleScanClick);
-    setScanState(ScanControlState::Idle);
-
-#ifdef Q_OS_WASM
-    ui->picoConnect->click();
-    ui->fgConnect->click();
-    ui->vmxConnect->click();
-#endif
-}
-
-void MainWindow::handleScanClick()
-{
-    switch (scanState) {
-    case ScanControlState::Idle:
-        synchronizeScanConfiguration();
-        setScanState(transitionScanState(scanState, ScanControlEvent::Start));
-        QTimer::singleShot(0, this, &MainWindow::performBoundaryCheck);
-        break;
-    case ScanControlState::Ready:
-        if (scan->prepare(minCorner, maxCorner) == Scan::Outcome::Scanning) {
-            setScanState(transitionScanState(scanState, ScanControlEvent::Continue));
-            scanTimer.start();
-        } else {
-            finishScan(Scan::Outcome::Failed);
-        }
-        break;
-    case ScanControlState::Scanning:
-        scanTimer.stop();
-        setScanState(transitionScanState(scanState, ScanControlEvent::Pause));
-        break;
-    case ScanControlState::Paused:
-        setScanState(transitionScanState(scanState, ScanControlEvent::Continue));
-        scanTimer.start();
-        break;
-    case ScanControlState::CheckingBoundary:
-        break;
-    }
-}
-
-void MainWindow::performBoundaryCheck()
-{
-    if (scanState != ScanControlState::CheckingBoundary) {
-        return;
-    }
-
-    const Scan::Outcome outcome = scan->checkBoundaries(minCorner, maxCorner, [this](const QString &status, int, int, const Data &) {
-        ui->scanStat->setText(status);
-    });
-    if (scanState != ScanControlState::CheckingBoundary) {
-        return;
-    }
-
-    if (outcome == Scan::Outcome::Ready) {
-        scanTimer.setInterval(scanTimerIntervalMilliseconds(scan->pointCount()));
-        QTimer::singleShot(2000, this, [this]() {
-            if (scanState == ScanControlState::CheckingBoundary) {
-                setScanState(transitionScanState(scanState, ScanControlEvent::BoundariesChecked));
+    const auto clearScanDisplays = [this]() {
+        ui->pressure->clear();
+        ui->pointCNT->reset();
+        ui->pointCNT->setFormat("");
+    };
+    connect(&scan, &Scan::stateChanged, this, [this, clearScanDisplays](scanState state) {
+        if (state != scan.state) return;
+        const bool running = scan.isRunning();
+        for (QWidget *widget : findChildren<QWidget *>()) {
+            if (qobject_cast<QPushButton *>(widget)) {
+                // Keep a pressed scan button enabled while progress changes.
+                widget->setEnabled(!running || (widget == ui->vmxKill && state != Killed)
+                    || (widget == ui->scan && (state == Ready || state == Scanning)));
+            } else if (qobject_cast<QAbstractSpinBox *>(widget) || qobject_cast<QLineEdit *>(widget)
+                       || qobject_cast<QComboBox *>(widget)) {
+                widget->setEnabled(!running);
             }
-        });
-    } else {
-        finishScan(outcome);
-    }
-}
-
-void MainWindow::advanceScan()
-{
-    if (scanState != ScanControlState::Scanning) {
-        return;
-    }
-
-    const Scan::Outcome outcome = scan->acquireNext([this](const QString &status, int complete, int total, const Data &data) {
-        ui->scanStat->setText(status);
+        }
+        switch (state) {
+        case Idle:
+        case Error:
+            ui->scan->setText("Scan");
+            if (state == Error) ui->scanStat->setText("Scan unavailable");
+            else if (!running) {
+                clearScanDisplays();
+                ui->scanStat->setText("Scan complete");
+                qInfo() << "Scan complete";
+            }
+            break;
+        case Checking:
+            ui->scan->setText("N/A");
+            ui->scanStat->setText("Checking");
+            break;
+        case Ready:
+            ui->scan->setText("Resume");
+            ui->scanStat->setText("Ready");
+            break;
+        case Scanning:
+            ui->scan->setText("Pause");
+            ui->scanStat->setText("Scanning");
+            break;
+        case Paused:
+            ui->scan->setText(running ? "N/A" : "Continue");
+            ui->scanStat->setText(running ? "Pausing" : "Paused");
+            break;
+        case Killed:
+            clearScanDisplays();
+            ui->scan->setText(running ? "N/A" : "Scan");
+            ui->scanStat->setText(running ? "Killed" : "Scan cancelled");
+            break;
+        }
+    });
+    connect(&scan, &Scan::measured, this, [this](Data data, int completed, int total) {
+        const scanState state = scan.state.load();
+        if (vmx.killflag || (state != Scanning && state != Paused)) return;
         ui->pointCNT->setRange(0, total);
-        ui->pointCNT->setValue(complete);
-        ui->pointCNT->setFormat(QString("%1 remaining").arg(total - complete));
+        ui->pointCNT->setValue(completed);
+        ui->pointCNT->setFormat(QString("%1 remaining").arg(total - completed));
         if (!data.points.isEmpty()) {
             series->replace(data.points);
-            ui->pressure->setText(QString::number(data.peak / SENS));
+            ui->pressure->setText(QString::number(data.peak / pico.sens));
         }
     });
-
-    if (outcome != Scan::Outcome::Scanning) {
-        finishScan(outcome);
-    }
+    connect(ui->scan, &QPushButton::clicked, this, [this]() {
+        if (pico.deviceState != ready || fg.deviceState != ready || vmx.deviceState != ready) {
+            qWarning() << "Configure all devices before scanning";
+            return;
+        }
+        switch (scan.state.load()) {
+        case Idle:
+        case Error:
+        case Killed:
+            vmx.steps = inchToSteps(ui->vmxStep->value());
+            minCorner = {inchToSteps(ui->minX->value()), inchToSteps(ui->minY->value()), inchToSteps(ui->minZ->value())};
+            maxCorner = {inchToSteps(ui->maxX->value()), inchToSteps(ui->maxY->value()), inchToSteps(ui->maxZ->value())};
+            scan.checkBound(minCorner, maxCorner);
+            break;
+        case Ready:
+        case Paused:
+            scan.resume();
+            break;
+        case Scanning:
+            scan.pause();
+            break;
+        case Checking:
+            return;
+        }
+    });
+    connect(ui->vmxKill, &QPushButton::clicked, this, [this, clearScanDisplays]() {
+        clearScanDisplays();
+        if (scan.isRunning()) {
+            vmx.kill();
+            return;
+        }
+        ui->scan->setEnabled(false);
+        vmx.kill();
+        // A paused scan's cancellation signal refreshes the controls.
+        ui->scan->setEnabled(false);
+        vmx.coord();
+        ui->scan->setEnabled(true);
+    });
 }
-
-void MainWindow::setScanState(ScanControlState state)
-{
-    scanState = state;
-    setScanControlsEnabled(state == ScanControlState::Idle);
-
-    switch (state) {
-    case ScanControlState::Idle:
-        ui->scan->setText("Scan");
-        break;
-    case ScanControlState::CheckingBoundary:
-        ui->scan->setText("N/A");
-        ui->scanStat->setText("Checking boundary");
-        break;
-    case ScanControlState::Ready:
-        ui->scan->setText("Continue");
-        ui->scanStat->setText("Ready");
-        break;
-    case ScanControlState::Scanning:
-        ui->scan->setText("Pause");
-        ui->scanStat->setText("Scanning");
-        break;
-    case ScanControlState::Paused:
-        ui->scan->setText("Continue");
-        ui->scanStat->setText("Paused");
-        break;
-    }
-}
-
-void MainWindow::finishScan(Scan::Outcome outcome)
-{
-    scanTimer.stop();
-    scan->reset();
-
-    const ScanControlEvent event = outcome == Scan::Outcome::Completed
-        ? ScanControlEvent::Complete
-        : outcome == Scan::Outcome::Cancelled ? ScanControlEvent::Cancel : ScanControlEvent::Fail;
-    setScanState(transitionScanState(scanState, event));
-
-    switch (outcome) {
-    case Scan::Outcome::Completed:
-        ui->scanStat->setText("Scan complete");
-        qInfo() << "Scan complete";
-        break;
-    case Scan::Outcome::Cancelled:
-        ui->scanStat->setText("Scan cancelled");
-        break;
-    case Scan::Outcome::Failed:
-        ui->scanStat->setText("Scan unavailable");
-        break;
-    case Scan::Outcome::Ready:
-    case Scan::Outcome::Scanning:
-        break;
-    }
-}
-
-void MainWindow::setScanControlsEnabled(bool enabled)
-{
-    const auto buttons = findChildren<QPushButton *>();
-    for (QPushButton *button : buttons) {
-        button->setEnabled(enabled);
-    }
-
-    if (!enabled) {
-        ui->vmxKill->setEnabled(true);
-        ui->scan->setEnabled(scanState == ScanControlState::Ready
-                             || scanState == ScanControlState::Scanning
-                             || scanState == ScanControlState::Paused);
-    }
-}
-
-void MainWindow::synchronizeScanConfiguration()
-{
-    vmx.steps = coordinateToSteps(ui->vmxStep->value());
-    minCorner = {
-        coordinateToSteps(ui->minX->value()),
-        coordinateToSteps(ui->minY->value()),
-        coordinateToSteps(ui->minZ->value())
-    };
-    maxCorner = {
-        coordinateToSteps(ui->maxX->value()),
-        coordinateToSteps(ui->maxY->value()),
-        coordinateToSteps(ui->maxZ->value())
-    };
-}
-
 
 void MainWindow::applyDashboardTheme(){
     ui->fgTrig->setProperty("buttonRole", "primary");
@@ -658,11 +580,11 @@ void MainWindow::applyDashboardTheme(){
 }
 
 void MainWindow::bindConnection(QPushButton *btn, QCheckBox *stat, Device *device){
-#ifndef Q_OS_WASM
     QTimer::singleShot(0, btn, &QPushButton::click);
-#endif
     connect(btn, &QPushButton::clicked, this, [this, btn, stat, device](){
+        if (scan.isRunning()) return;
         btn->setEnabled(false);
+        ui->scan->setEnabled(false);
         bool connection;
         if (stat->text() == "Offline") {
             stat->setText("connecting");
@@ -686,6 +608,7 @@ void MainWindow::bindConnection(QPushButton *btn, QCheckBox *stat, Device *devic
             btn->setText("Connect");
         }
         btn->setEnabled(true);
+        ui->scan->setEnabled(true);
     });
 }
 
@@ -693,9 +616,12 @@ void MainWindow::bindLine(QLineEdit *line, const QString &key, Device *device, Q
     str = settings.value(key, "").toString();
     line->setText(str);
     connect(line, &QLineEdit::textChanged, this, [this, key, device, &str](const QString &txt){
+        if (scan.isRunning()) return;
         str = txt;
+#ifndef Q_OS_WASM
         settings.setValue(key, str);
-        markDeviceConfigurationChanged(device);
+#endif
+        checkConfig(device);
         qDebug() << key << ": " << str;
     });
 }
@@ -704,25 +630,53 @@ void MainWindow::bindSpinBox(QSpinBox *spinBox, const QString &key, Device *devi
     num = settings.value(key, spinBox->value()).toInt();
     spinBox->setValue(num);
     num = spinBox->value();
+#ifndef Q_OS_WASM
     settings.setValue(key, num);
+#endif
     connect(spinBox, &QSpinBox::valueChanged, this, [this, key, device, &num](int val) {
+        if (scan.isRunning()) return;
         num = val;
+#ifndef Q_OS_WASM
         settings.setValue(key, num);
-        markDeviceConfigurationChanged(device);
+#endif
+        checkConfig(device);
+        qDebug() << key << ": " << num;
+    });
+}
+
+void MainWindow::bindDoubleBox(QDoubleSpinBox *spinBox, const QString &key, Device *device, double &num){
+    num = settings.value(key, spinBox->value()).toDouble();
+    spinBox->setValue(num);
+    num = spinBox->value();
+#ifndef Q_OS_WASM
+    settings.setValue(key, num);
+#endif
+    connect(spinBox, &QDoubleSpinBox::valueChanged, this, [this, key, device, &num](double val) {
+        if (scan.isRunning()) return;
+        num = val;
+#ifndef Q_OS_WASM
+        settings.setValue(key, num);
+#endif
+        checkConfig(device);
         qDebug() << key << ": " << num;
     });
 }
 
 void MainWindow::bindCoordBox(QDoubleSpinBox *coordBox, const QString &key, Device *device, int &num){
-    const int defaultSteps = coordinateToSteps(coordBox->value());
+    const int defaultSteps = inchToSteps(coordBox->value());
     num = settings.value(key, defaultSteps).toInt();
     coordBox->setValue(num*STEP_SIZE);
-    num = coordinateToSteps(coordBox->value());
+    num = inchToSteps(coordBox->value());
+#ifndef Q_OS_WASM
     settings.setValue(key, num);
+#endif
     connect(coordBox, &QDoubleSpinBox::valueChanged, this, [this, key, device, &num](double val) {
-        num = coordinateToSteps(val);
+        if (scan.isRunning()) return;
+        num = inchToSteps(val);
+#ifndef Q_OS_WASM
         settings.setValue(key, num);
-        markDeviceConfigurationChanged(device);
+#endif
+        checkConfig(device);
         qDebug() << key << ": " << num;
     });
 }
@@ -730,14 +684,17 @@ void MainWindow::bindCoordBox(QDoubleSpinBox *coordBox, const QString &key, Devi
 void MainWindow::bindMove(QPushButton *btn, int dx, int dy, int dz){
     connect(btn, &QPushButton::clicked, this, [this, btn, dx, dy, dz](){
         btn->setEnabled(false);
+        ui->scan->setEnabled(false);
         QApplication::processEvents();
         Coord goal;
         goal.X = dx * vmx.steps + vmx.pos.X;
         goal.Y = dy * vmx.steps + vmx.pos.Y;
         goal.Z = dz * vmx.steps + vmx.pos.Z;
+        vmx.killflag = false;
         vmx.move(goal);
-        emit vmx.updateCoord();
+        emit vmx.updateCoord(vmx.pos);
         btn->setEnabled(true);
+        ui->scan->setEnabled(true);
     });
 };
 
@@ -745,22 +702,38 @@ void MainWindow::bindComboBox(QComboBox *comboBox, const QString &key, Device *d
     idx = settings.value(key, 0).toInt();
     comboBox->setCurrentIndex(idx);
     connect(comboBox, &QComboBox::currentIndexChanged, this, [this, key, device, &idx](int val){
+        if (scan.isRunning()) return;
         idx = val;
+#ifndef Q_OS_WASM
         settings.setValue(key, idx);
-        markDeviceConfigurationChanged(device);
+#endif
+        checkConfig(device);
         qDebug() << key << ": " << idx;
     });
 };
 
 
 
-void MainWindow::markDeviceConfigurationChanged(Device *device)
+void MainWindow::checkConfig(Device *device)
 {
     if (device != nullptr && device->deviceState == ready) {
         device->deviceState = online;
     }
 }
 
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    if (scan.isRunning()) {
+        event->ignore();
+        connect(&scan, &QThread::finished, this, &QWidget::close, Qt::UniqueConnection);
+        vmx.kill();
+        return;
+    }
+    QMainWindow::closeEvent(event);
+}
+
 MainWindow::~MainWindow(){
+    if (scan.isRunning()) vmx.kill();
+    scan.wait();
     delete ui;
 }

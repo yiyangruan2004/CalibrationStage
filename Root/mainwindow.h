@@ -2,16 +2,21 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QBrush>
+#include <QColor>
+#include <QFont>
+#include <QMargins>
 #include <QSettings>
+#include <QMetaObject>
 #include <QTimer>
-#include <QFile>
-#include <QDir>
-#include <memory>
+#include <QSignalBlocker>
+#include <QCloseEvent>
 
 #include "pico.h"
 #include "vmx.h"
 #include "fg.h"
 #include "scan.h"
+#include "filer.h"
 #include "./ui_mainwindow.h"
 
 #include <QtCharts/QChartView>
@@ -33,17 +38,17 @@ class MainWindow : public QMainWindow
 public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
+protected:
+    void closeEvent(QCloseEvent *event) override;
 private:
+    friend class ScanLifecycleTests;
     Ui::MainWindow *ui;
     QSettings settings;
     Pico pico;
     Fg fg;
     Vmx vmx;
 
-    const QDir folderPath = QDir::current().filePath("../Data");
-    std::unique_ptr<Scan> scan;
-    QTimer scanTimer;
-    ScanControlState scanState = ScanControlState::Idle;
+    Scan scan{pico, fg, vmx};
 
 
     QLineSeries *series = new QLineSeries();
@@ -53,19 +58,13 @@ private:
     Coord minCorner;
     Coord maxCorner;
     void applyDashboardTheme();
-    void markDeviceConfigurationChanged(Device *device);
-    void handleScanClick();
-    void performBoundaryCheck();
-    void advanceScan();
-    void setScanState(ScanControlState state);
-    void finishScan(Scan::Outcome outcome);
-    void setScanControlsEnabled(bool enabled);
-    void synchronizeScanConfiguration();
+    void checkConfig(Device *device);
 
     // Binding
     void bindConnection(QPushButton *btn, QCheckBox *stat, Device *device);
     void bindLine(QLineEdit *line, const QString &key, Device *device, QString &str);
     void bindSpinBox(QSpinBox *spinBox, const QString &key, Device *device, int &num);
+    void bindDoubleBox(QDoubleSpinBox *spinBox, const QString &key, Device *device, double &num);
     void bindCoordBox(QDoubleSpinBox *coordBox, const QString &key, Device *device, int &num);
     void bindComboBox(QComboBox *comboBox, const QString &key, Device *device, int &idx);
     void bindMove(QPushButton *btn, int dx, int dy, int dz);

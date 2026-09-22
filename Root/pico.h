@@ -1,17 +1,20 @@
 #pragma once
 
-#include <QObject>
-#include <QString>
-#include <QSettings>
-#include <QtCharts/QLineSeries>
-#include <vector>
+#include <QDebug>
+#include <QPointF>
+#include <QVector>
+#include <cmath>
+
+#ifndef Q_OS_WASM
 #include <QElapsedTimer>
 #include <QThread>
-#include <random>
-#include <cmath>
-#ifndef Q_OS_WASM
+#include <cstdint>
+#include <vector>
 #include "ps5000aApi.h"
+#else
+#include <algorithm>
 #endif
+
 #include "device.h"
 
 struct Data{
@@ -46,21 +49,18 @@ public:
     int samp;
     int offset;
     int timebase;
+    double sens;
 
     DeviceState runBlock();
 
     Data read();
-    void setSimulationGain(double gain);
-    void setSimulationTimeShift(double timeShift);
 
 private:
-#ifndef Q_OS_WASM
-    int16_t handle;
+#ifdef Q_OS_WASM
+    Data simulationData;
+#else
+    int16_t handle = 0;
     const char* picoStatusToString(PICO_INFO status);
     std::vector<int16_t> buffer;
-#else
-    double simulationGain = 1.0;
-    double simulationTimeShift = 0.0;
-    std::mt19937 simulationGenerator{0xC411B};
 #endif
 };

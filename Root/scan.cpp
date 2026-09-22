@@ -1,184 +1,181 @@
 #include "scan.h"
 
-#include <cmath>
-
-#include "filer.h"
-#include "fg.h"
-#include "pico.h"
-#include "vmx.h"
-
-Scan::Scan(Pico &pico, Fg &fg, Vmx &vmx, const QDir &folderPath)
-    : pico(pico)
-    , fg(fg)
-    , vmx(vmx)
-    , folderPath(folderPath)
-{}
-
-Scan::Outcome Scan::checkBoundaries(const Coord &minimum, const Coord &maximum, const ProgressCallback &progress)
+Scan::Scan(Pico &pico, Fg &fg, Vmx &vmx) : pico(pico), fg(fg), vmx(vmx)
 {
-    if (pico.deviceState != ready || fg.deviceState != ready || vmx.deviceState != ready) {
-        qWarning() << "Configure all devices before scanning";
-        return Outcome::Failed;
-    }
-
-    if (vmx.steps <= 0 || maximum.X < minimum.X || maximum.Y < minimum.Y || maximum.Z < minimum.Z) {
-        qWarning() << "Invalid scan bounds or step size";
-        return Outcome::Failed;
-    }
-
-    int trajectoryStep = vmx.steps;
-#ifdef Q_OS_WASM
-    trajectoryStep = simulatedScanStep(minimum, maximum, vmx.steps);
-#else
-    if (!isValidScanRequest(minimum, maximum, vmx.steps)) {
-        qWarning() << "Scan trajectory exceeds the supported point count";
-        return Outcome::Failed;
-    }
-#endif
-
-    const QVector<Coord> trajectory = buildScanTrajectory(minimum, maximum, trajectoryStep);
-    if (trajectory.isEmpty()) {
-        qWarning() << "Scan trajectory is empty";
-        return Outcome::Failed;
-    }
-
-    this->minimum = minimum;
-    this->maximum = maximum;
-    points = trajectory;
-    peaks.clear();
-    peaks.reserve(points.size());
-    nextPoint = 0;
-    focusPeak = -1.0;
-    focusPosition = points.first();
-
-    progress("Checking boundary", 0, 0, {});
-    vmx.move(maximum);
-    vmx.coord();
-    if (wasCancelled()) {
-        reset();
-        return Outcome::Cancelled;
-    }
-
-    vmx.move(minimum);
-    vmx.coord();
-    if (wasCancelled()) {
-        reset();
-        return Outcome::Cancelled;
-    }
-
-    boundaryChecked = true;
-    return Outcome::Ready;
-}
-
-Scan::Outcome Scan::prepare(const Coord &minimum, const Coord &maximum)
-{
-    Q_UNUSED(minimum)
-    Q_UNUSED(maximum)
-    if (!boundaryChecked || points.isEmpty() || pico.deviceState != ready || fg.deviceState != ready || vmx.deviceState != ready) {
-        qWarning() << "Configure all devices before scanning";
-        reset();
-        return Outcome::Failed;
-    }
-    return Outcome::Scanning;
-}
-
-Scan::Outcome Scan::acquireNext(const ProgressCallback &progress)
-{
-    if (nextPoint >= points.size()) {
-        return Outcome::Failed;
-    }
-    if (pico.deviceState != ready || fg.deviceState != ready || vmx.deviceState != ready) {
-        qWarning() << "A device was reconfigured during scanning";
-        reset();
-        return Outcome::Failed;
-    }
-
-    const Coord &point = points.at(nextPoint);
-    vmx.move(point);
-    if (wasCancelled()) {
-        reset();
-        return Outcome::Cancelled;
-    }
-
-    pico.setSimulationGain(simulationGain(point, minimum, maximum));
-    pico.setSimulationTimeShift(simulationPulseTimeShift(point, minimum, maximum));
-    pico.runBlock();
-    fg.trig();
-    const Data data = pico.read();
-    peaks.append(data.peak);
-    if (data.peak > focusPeak) {
-        focusPeak = data.peak;
-        focusPosition = point;
-    }
-    ++nextPoint;
-    progress("Scanning", nextPoint, points.size(), data);
-
-    if (nextPoint < points.size()) {
-        return Outcome::Scanning;
-    }
-
-    if (!Filer::saveScan(folderPath, {fg.freq, fg.amp, volt[pico.range], pico.samp, vmx.pos}, points, peaks)) {
-        reset();
-        return Outcome::Failed;
-    }
-
-    vmx.move(focusPosition);
-    vmx.coord();
-    resetSimulation();
-    pico.runBlock();
-    fg.trig();
-    boundaryChecked = false;
-    points.clear();
-    peaks.clear();
-    nextPoint = 0;
-    return Outcome::Completed;
-}
-
-int Scan::pointCount() const
-{
-    return points.size();
-}
-
-void Scan::reset()
-{
-    resetSimulation();
-    vmx.killFlag = false;
-    boundaryChecked = false;
-    points.clear();
-    peaks.clear();
-    nextPoint = 0;
-    focusPeak = -1.0;
-}
-
-void Scan::resetSimulation()
-{
-    pico.setSimulationGain(1.0);
-    pico.setSimulationTimeShift(0.0);
-}
-
-double Scan::simulationGain(const Coord &point, const Coord &minimum, const Coord &maximum)
-{
-    const auto normalizedDistance = [](int value, int lower, int upper) {
-        if (upper == lower) {
-            return 0.0;
+    connect(&vmx, &Vmx::killed, this, [this] {
+        {
+            QMutexLocker lock(&mutex);
+            wake.wakeAll();
         }
-        const double centre = (static_cast<double>(lower) + static_cast<double>(upper)) / 2.0;
-        const double radius = (static_cast<double>(upper) - static_cast<double>(lower)) / 2.0;
-        return (static_cast<double>(value) - centre) / radius;
-    };
-
-    const double x = normalizedDistance(point.X, minimum.X, maximum.X);
-    const double y = normalizedDistance(point.Y, minimum.Y, maximum.Y);
-    const double z = normalizedDistance(point.Z, minimum.Z, maximum.Z);
-    return std::exp(-2.5 * ((x * x) + (y * y) + (z * z)));
+        if (!isRunning() && state == Paused) {
+            state = Killed;
+            emit stateChanged(Killed);
+        }
+    }, Qt::DirectConnection);
+    connect(this, &QThread::finished, this, [this] { emit stateChanged(state); });
 }
 
-bool Scan::wasCancelled()
+Scan::~Scan()
 {
-    if (!vmx.killFlag) {
-        return false;
+    if (isRunning()) vmx.kill();
+    wait();
+}
+
+void Scan::checkBound(const Coord &min, const Coord &max)
+{
+    if (QThread::currentThread() != this) {
+        if (isRunning()) return;
+        vmx.killflag = false;
+        minimum = min;
+        maximum = max;
+        points.clear();
+        peaks.clear();
+        state = Checking;
+        pico.moveToThread(this);
+        fg.moveToThread(this);
+        vmx.moveToThread(this);
+        QThread::start();
+        emit stateChanged(Checking);
+        return;
     }
-    qWarning() << "Scan cancelled";
-    vmx.killFlag = false;
-    return true;
+    const qint64 dx = static_cast<qint64>(max.X) - min.X;
+    const qint64 dy = static_cast<qint64>(max.Y) - min.Y;
+    const qint64 dz = static_cast<qint64>(max.Z) - min.Z;
+    const qint64 step = vmx.steps;
+    if (step <= 0 || dx < 0 || dy < 0 || dz < 0) {
+        qWarning() << "Invalid scan bounds or step size";
+        state = Error;
+        emit stateChanged(Error);
+        return;
+    }
+    qint64 count = 1;
+    for (qint64 span : {dx, dy, dz}) {
+        const qint64 axisCount = span / step + 1;
+        if (count > std::numeric_limits<int>::max() / axisCount) {
+            qWarning() << "Scan trajectory exceeds the supported point count";
+            state = Error;
+            emit stateChanged(Error);
+            return;
+        }
+        count *= axisCount;
+    }
+    points.reserve(count);
+    peaks.reserve(count);
+    for (qint64 z = min.Z; z <= max.Z; z += step) {
+        bool increasingX = true;
+        for (qint64 y = min.Y; y <= max.Y; y += step) {
+            for (qint64 x = 0; x <= dx; x += step) {
+                if (vmx.killflag) return;
+                points.append({static_cast<int>(increasingX ? min.X + x : max.X - x),
+                               static_cast<int>(y), static_cast<int>(z)});
+            }
+            increasingX = !increasingX;
+        }
+    }
+    for (const Coord &corner : {max, min}) {
+        if (vmx.killflag) return;
+        vmx.move(corner);
+        if (vmx.killflag) return;
+        vmx.coord();
+    }
+}
+
+void Scan::resume()
+{
+    {
+        QMutexLocker lock(&mutex);
+        if (vmx.killflag || (state == Paused && isRunning())) return;
+        if (state != Ready && state != Paused) return;
+        state = Scanning;
+        if (!isRunning()) {
+            pico.moveToThread(this);
+            fg.moveToThread(this);
+            vmx.moveToThread(this);
+            QThread::start();
+        } else {
+            wake.wakeAll();
+        }
+    }
+    emit stateChanged(Scanning);
+}
+
+void Scan::pause()
+{
+    {
+        QMutexLocker lock(&mutex);
+        if (state != Scanning || !isRunning()) return;
+        state = Paused;
+    }
+    emit stateChanged(Paused);
+}
+
+void Scan::run()
+{
+    if (state == Checking) {
+        checkBound(minimum, maximum);
+        if (state == Checking && !vmx.killflag) {
+            state = Ready;
+            emit stateChanged(Ready);
+        }
+    }
+    while (!vmx.killflag) {
+        {
+            QMutexLocker lock(&mutex);
+            while (state == Ready && !vmx.killflag) wake.wait(&mutex);
+            if (vmx.killflag || state != Scanning) break;
+        }
+        if (peaks.size() == points.size()) {
+#ifndef Q_OS_WASM
+            if (!Filer::saveScan({fg.freq, fg.amp, volt[pico.range], pico.samp, vmx.pos, pico.sens}, points, peaks)) {
+                {
+                    QMutexLocker lock(&mutex);
+                    state = Error;
+                }
+                emit stateChanged(Error);
+                break;
+            }
+#endif
+            double focusPeak = -1.0;
+            int focus = 0;
+            for (int i = 0; i < peaks.size(); ++i) {
+                if (peaks.at(i) > focusPeak) {
+                    focusPeak = peaks.at(i);
+                    focus = i;
+                }
+            }
+            if (vmx.killflag) break;
+            vmx.move(points.at(focus));
+            if (vmx.killflag) break;
+            vmx.coord();
+            if (vmx.killflag) break;
+            pico.runBlock();
+            fg.trig();
+            {
+                QMutexLocker lock(&mutex);
+                state = Idle;
+            }
+            break;
+        }
+        vmx.move(points.at(peaks.size()));
+        if (vmx.killflag) break;
+        pico.runBlock();
+        fg.trig();
+        const Data data = pico.read();
+        if (vmx.killflag) break;
+        peaks.append(data.peak);
+        emit measured(data, peaks.size(), points.size());
+    }
+    if (vmx.killflag) {
+        {
+            QMutexLocker lock(&mutex);
+            state = Killed;
+        }
+        emit stateChanged(Killed);
+        vmx.kill();
+        vmx.coord();
+    }
+    // Return device ownership before the window enables manual controls again.
+    pico.moveToThread(thread());
+    fg.moveToThread(thread());
+    vmx.moveToThread(thread());
 }

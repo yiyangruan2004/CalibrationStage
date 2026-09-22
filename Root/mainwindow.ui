@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>1103</width>
-    <height>702</height>
+    <height>733</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -652,8 +652,112 @@ li.checked::marker { content: &quot;\2612&quot;; }
            <string>Data aquisition</string>
           </property>
           <layout class="QGridLayout" name="gridLayout_8">
+           <property name="sizeConstraint">
+            <enum>QLayout::SizeConstraint::SetMinimumSize</enum>
+           </property>
+           <item row="2" column="0">
+            <widget class="QLabel" name="label_5">
+             <property name="text">
+              <string>Y</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="2">
+            <widget class="QDoubleSpinBox" name="maxX">
+             <property name="decimals">
+              <number>5</number>
+             </property>
+             <property name="minimum">
+              <double>-12.000000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>12.000000000000000</double>
+             </property>
+            </widget>
+           </item>
+           <item row="6" column="1">
+            <widget class="QDoubleSpinBox" name="minZ">
+             <property name="decimals">
+              <number>5</number>
+             </property>
+             <property name="minimum">
+              <double>-12.000000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>12.000000000000000</double>
+             </property>
+            </widget>
+           </item>
+           <item row="11" column="1">
+            <widget class="QLabel" name="label_11">
+             <property name="text">
+              <string>Points remaining:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QLabel" name="label_7">
+             <property name="text">
+              <string>Min Corner</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="label_6">
+             <property name="text">
+              <string>X</string>
+             </property>
+            </widget>
+           </item>
            <item row="2" column="1">
             <widget class="QDoubleSpinBox" name="minY">
+             <property name="decimals">
+              <number>5</number>
+             </property>
+             <property name="minimum">
+              <double>-12.000000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>12.000000000000000</double>
+             </property>
+            </widget>
+           </item>
+           <item row="9" column="1">
+            <widget class="QLabel" name="label_4">
+             <property name="text">
+              <string>Pressure (kPa):</string>
+             </property>
+            </widget>
+           </item>
+           <item row="6" column="0">
+            <widget class="QLabel" name="label_2">
+             <property name="text">
+              <string>Z</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="2">
+            <widget class="QLabel" name="label_9">
+             <property name="text">
+              <string>Max Corner</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QDoubleSpinBox" name="minX">
+             <property name="decimals">
+              <number>5</number>
+             </property>
+             <property name="minimum">
+              <double>-12.000000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>12.000000000000000</double>
+             </property>
+            </widget>
+           </item>
+           <item row="6" column="2">
+            <widget class="QDoubleSpinBox" name="maxZ">
              <property name="decimals">
               <number>5</number>
              </property>
@@ -678,109 +782,30 @@ li.checked::marker { content: &quot;\2612&quot;; }
              </property>
             </widget>
            </item>
-           <item row="10" column="1">
-            <widget class="QLabel" name="label_11">
+           <item row="0" column="3">
+            <widget class="QLabel" name="label_16">
              <property name="text">
-              <string>Points remaining:</string>
+              <string>Sensitivity (mV/kPa)</string>
              </property>
             </widget>
            </item>
-           <item row="6" column="0">
-            <widget class="QLabel" name="label_2">
-             <property name="text">
-              <string>Z</string>
-             </property>
-            </widget>
-           </item>
-           <item row="1" column="2">
-            <widget class="QDoubleSpinBox" name="maxX">
+           <item row="1" column="3">
+            <widget class="QDoubleSpinBox" name="picoSens">
              <property name="decimals">
-              <number>5</number>
+              <number>4</number>
              </property>
              <property name="minimum">
-              <double>-12.000000000000000</double>
+              <double>0.000100000000000</double>
              </property>
-             <property name="maximum">
-              <double>12.000000000000000</double>
+             <property name="singleStep">
+              <double>0.000100000000000</double>
              </property>
-            </widget>
-           </item>
-           <item row="0" column="2">
-            <widget class="QLabel" name="label_9">
-             <property name="text">
-              <string>Max Corner</string>
+             <property name="value">
+              <double>0.214900000000000</double>
              </property>
             </widget>
            </item>
-           <item row="6" column="1">
-            <widget class="QDoubleSpinBox" name="minZ">
-             <property name="decimals">
-              <number>5</number>
-             </property>
-             <property name="minimum">
-              <double>-12.000000000000000</double>
-             </property>
-             <property name="maximum">
-              <double>12.000000000000000</double>
-             </property>
-            </widget>
-           </item>
-           <item row="2" column="0">
-            <widget class="QLabel" name="label_5">
-             <property name="text">
-              <string>Y</string>
-             </property>
-            </widget>
-           </item>
-           <item row="0" column="1">
-            <widget class="QLabel" name="label_7">
-             <property name="text">
-              <string>Min Corner</string>
-             </property>
-            </widget>
-           </item>
-           <item row="1" column="0">
-            <widget class="QLabel" name="label_6">
-             <property name="text">
-              <string>X</string>
-             </property>
-            </widget>
-           </item>
-           <item row="9" column="2">
-            <widget class="QLabel" name="pressure">
-             <property name="text">
-              <string>0</string>
-             </property>
-            </widget>
-           </item>
-           <item row="8" column="1">
-            <widget class="QPushButton" name="scan">
-             <property name="text">
-              <string>Scan</string>
-             </property>
-            </widget>
-           </item>
-           <item row="1" column="1">
-            <widget class="QDoubleSpinBox" name="minX">
-             <property name="decimals">
-              <number>5</number>
-             </property>
-             <property name="minimum">
-              <double>-12.000000000000000</double>
-             </property>
-             <property name="maximum">
-              <double>12.000000000000000</double>
-             </property>
-            </widget>
-           </item>
-           <item row="9" column="1">
-            <widget class="QLabel" name="label_4">
-             <property name="text">
-              <string>Pressure (kPa):</string>
-             </property>
-            </widget>
-           </item>
-           <item row="10" column="2">
+           <item row="11" column="2" colspan="2">
             <widget class="QProgressBar" name="pointCNT">
              <property name="maximum">
               <number>1</number>
@@ -793,20 +818,21 @@ li.checked::marker { content: &quot;\2612&quot;; }
              </property>
             </widget>
            </item>
-           <item row="6" column="2">
-            <widget class="QDoubleSpinBox" name="maxZ">
-             <property name="decimals">
-              <number>5</number>
-             </property>
-             <property name="minimum">
-              <double>-12.000000000000000</double>
-             </property>
-             <property name="maximum">
-              <double>12.000000000000000</double>
+           <item row="9" column="2" colspan="2">
+            <widget class="QLabel" name="pressure">
+             <property name="text">
+              <string>0</string>
              </property>
             </widget>
            </item>
-           <item row="8" column="2">
+           <item row="2" column="3">
+            <widget class="QPushButton" name="scan">
+             <property name="text">
+              <string>Scan</string>
+             </property>
+            </widget>
+           </item>
+           <item row="6" column="3">
             <widget class="QLabel" name="scanStat">
              <property name="text">
               <string>Idle</string>

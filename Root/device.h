@@ -1,6 +1,6 @@
 #pragma once
-
 #include <QObject>
+#include <atomic>
 
 enum DeviceState {
     offline,
@@ -17,5 +17,5 @@ public:
     explicit Device(QObject *parent = nullptr);
     ~Device() override = default;
     virtual DeviceState connect(bool connection) = 0;
-    DeviceState deviceState;
+    std::atomic<DeviceState> deviceState;
 };

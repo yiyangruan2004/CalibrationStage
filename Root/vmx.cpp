@@ -10,10 +10,7 @@ Coord operator-(const Coord& a, const Coord& b){
 }
 #endif
 
-Vmx::Vmx(QObject *parent)
-    : Device(parent)
-    , killFlag(false)
-{}
+Vmx::Vmx(QObject *parent) : Device(parent) {}
 
 #ifndef Q_OS_WASM
 QByteArray Vmx::read(const QByteArray &term){
@@ -22,6 +19,7 @@ QByteArray Vmx::read(const QByteArray &term){
     timer.start();
     while (timer.elapsed() < 5000) {
         QCoreApplication::processEvents();
+        if (term == "^" && killflag) break;
         if (port.bytesAvailable() > 0) {
             response += port.readAll();
             if (response.contains(term)) {
@@ -49,10 +47,8 @@ DeviceState Vmx::connect(bool connection){
 #ifdef Q_OS_WASM
     deviceState = connection ? ready : offline;
     if (connection) {
-        emit updateCoord();
+        emit updateCoord(pos);
     }
-    qDebug() << "vmx.simulation.connect:" << deviceState;
-    return deviceState;
 #else
     if (connection){
         port.setPortName(serial);
@@ -72,7 +68,7 @@ DeviceState Vmx::connect(bool connection){
         write("V");
         QByteArray response = read("R");
         if (response == "R") {
-            emit updateCoord();
+            emit updateCoord(pos);
             deviceState = ready;
         } else {
             qWarning() << "Restart motor control unit \n Unexpected motor response: " << response;
@@ -84,27 +80,19 @@ DeviceState Vmx::connect(bool connection){
             deviceState = offline;
         }
     }
+#endif
     qDebug() << "vmx.connect: " << deviceState;
     return deviceState;
-#endif
 }
 
 
 
 Coord Vmx::move(const Coord& goal){
-#ifdef Q_OS_WASM
-    if (deviceState == offline) {
-        qWarning() << "Attempt to move simulated motor while offline";
-        return pos;
-    }
-    pos = goal;
-    emit updateCoord();
-    return pos;
-#else
     if(deviceState == offline){
         qWarning() << "Attempt to move motor while offline";
         return pos;
     }
+#ifndef Q_OS_WASM
     Coord dPos = goal - pos;
     QString cmd = "C ";
     if(dPos.X != 0){
@@ -119,27 +107,25 @@ Coord Vmx::move(const Coord& goal){
     cmd += "R";
     write(cmd.toUtf8());
 
-    QByteArray response;
-    response = read("^");
-    pos = goal;
-    return goal;
+    read("^");
+#else
+    QThread::msleep(100);
 #endif
+    if (killflag) return pos;
+    pos = goal;
+#ifdef Q_OS_WASM
+    emit updateCoord(pos);
+#endif
+    return pos;
 }
 
 
 Coord Vmx::coord() {
-#ifdef Q_OS_WASM
-    if (deviceState == offline) {
-        qWarning() << "Attempt to read simulated motor coordinates while offline";
-        return pos;
-    }
-    emit updateCoord();
-    return pos;
-#else
     if(deviceState == offline){
-        qWarning() << "Attempt to move motor while offline";
+        qWarning() << "Attempt to read motor coordinates while offline";
         return pos;
     }
+#ifndef Q_OS_WASM
     QByteArray response;
     write("X");
     response = read("\r");
@@ -151,44 +137,41 @@ Coord Vmx::coord() {
     response = read("\r");
     pos.Z = response.trimmed().toInt();
     qDebug() << "vmx.coord: " << pos.X << "," << pos.Y << "," << pos.Z;
-    emit updateCoord();
-    return pos;
 #endif
+    emit updateCoord(pos);
+    return pos;
 }
 
 DeviceState Vmx::zero(){
-#ifdef Q_OS_WASM
-    if (deviceState == offline) {
-        qWarning() << "Attempt to zero simulated motor while offline";
-        return deviceState;
-    }
-    pos = {};
-    emit updateCoord();
-    return deviceState;
-#else
     if(deviceState == offline){
-        qWarning() << "Attempt to move motor while offline";
+        qWarning() << "Attempt to zero motor while offline";
         return deviceState;
     }
+#ifdef Q_OS_WASM
+    pos = {};
+    emit updateCoord(pos);
+#else
     write("N");
+#endif
     qDebug() << "vmx.zero";
     return deviceState;
-#endif
 }
 
 DeviceState Vmx::kill(){
-#ifdef Q_OS_WASM
-    qDebug() << "vmx.simulation.kill";
-    return deviceState;
-#else
-    if(deviceState == offline){
-        qWarning() << "Attempt to move motor while offline";
-        return deviceState;
+    killflag = true;
+    emit killed();
+#ifndef Q_OS_WASM
+    // During a scan, the worker sends the command after observing killflag.
+    if (QThread::currentThread() == thread()) {
+        if (deviceState == offline) {
+            qWarning() << "Attempt to move motor while offline";
+            return deviceState;
+        }
+        write("K");
     }
-    write("K");
+#endif
     qDebug() << "vmx.kill";
     return deviceState;
-#endif
 }
 
 Vmx::~Vmx(){

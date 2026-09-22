@@ -1,11 +1,13 @@
 #pragma once
-#include <QObject>
+#include <QDebug>
 #include <QString>
-#include <QSettings>
 
 #ifndef Q_OS_WASM
+#include <QByteArray>
+#include <string>
 #include "visa.h"
 #endif
+
 #include "device.h"
 
 
@@ -19,18 +21,16 @@ public:
 
     QString id;
     DeviceState connect(bool connection);
-
     DeviceState config();
     int wave;
     int amp;
     int freq;
     int cyc;
-
     DeviceState trig();
 private:
 #ifndef Q_OS_WASM
-    ViSession rmSession;
-    ViSession instrSession;
+    ViSession rmSession = VI_NULL;
+    ViSession instrSession = VI_NULL;
     DeviceState write(const char *cmd);
 #endif
 };
